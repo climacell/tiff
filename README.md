@@ -22,7 +22,7 @@ TIFF for Go
 Install
 =======
 
-1. `go get github.com/chai2010/tiff`
+1. `go get github.com/climacell/tiff`
 2. `go run hello.go`
 
 Example

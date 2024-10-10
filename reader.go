@@ -61,6 +61,7 @@ func OpenReader(r io.Reader) (p *Reader, err error) {
 func (p *Reader) ImageNum() int {
 	return len(p.Ifd)
 }
+
 func (p *Reader) SubImageNum(i int) int {
 	return len(p.Ifd[i])
 }
@@ -113,6 +114,10 @@ func (p *Reader) DecodeImageBlock(i, j, col, row int) (m image.Image, err error)
 		return
 	}
 	return
+}
+
+func (p *Reader) DecodeImageBlockData(i, j, col, row int) ([]byte, error) {
+	return p.Ifd[i][j].DecodeBlockData(p.rs, col, row)
 }
 
 func (p *Reader) Close() (err error) {

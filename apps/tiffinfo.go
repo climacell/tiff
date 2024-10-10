@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
+//go:build ingore
 // +build ingore
 
 package main
@@ -11,7 +12,7 @@ import (
 	"log"
 	"os"
 
-	tiff "github.com/chai2010/tiff"
+	tiff "github.com/climacell/tiff"
 )
 
 func main() {

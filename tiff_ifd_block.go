@@ -156,6 +156,29 @@ func (p *IFD) DecodeBlock(r io.ReadSeeker, col, row int, dst image.Image) (err e
 	return
 }
 
+func (p *IFD) DecodeBlockData(r io.ReadSeeker, col, row int) (data []byte, err error) {
+	blocksAcross, blocksDown := p.BlocksAcross(), p.BlocksDown()
+	if col < 0 || row < 0 || col >= blocksAcross || row >= blocksDown {
+		err = fmt.Errorf("tiff: IFD.DecodeBlock, bad col/row = %d/%d", col, row)
+		return
+	}
+
+	bounds := p.BlockBounds(col, row)
+	offset := p.BlockOffset(col, row)
+	count := p.BlockCount(col, row)
+
+	if _, err = r.Seek(offset, 0); err != nil {
+		return
+	}
+	limitReader := io.LimitReader(r, count)
+
+	if data, err = p.Compression().Decode(limitReader, bounds.Dx(), bounds.Dy()); err != nil {
+		return
+	}
+
+	return
+}
+
 func (p *IFD) decodePredictor(data []byte, r image.Rectangle) (out []byte, err error) {
 	bpp := p.Depth()
 	spp := p.Channels()

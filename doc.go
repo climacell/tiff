@@ -15,12 +15,12 @@ TIFF Tags: http://www.awaresystems.be/imaging/tiff/tifftags.html
 
 Features:
 
-	1. Support BigTiff
-	2. Support decode multiple image
-	3. Support decode subifd image
-	4. Support RGB format
-	5. Support Float DataType
-	6. More ...
+ 1. Support BigTiff
+ 2. Support decode multiple image
+ 3. Support decode subifd image
+ 4. Support RGB format
+ 5. Support Float DataType
+ 6. More ...
 
 Example:
 
@@ -33,7 +33,7 @@ Example:
 		"log"
 		"path/filepath"
 
-		tiff "github.com/chai2010/tiff"
+		tiff "github.com/climacell/tiff"
 	)
 
 	func main() {
