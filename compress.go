@@ -11,7 +11,7 @@ import (
 	"io"
 	"io/ioutil"
 
-	"github.com/climecell/tiff/internal/fax"
+	"github.com/climacell/tiff/internal/fax"
 )
 
 func (p TagValue_CompressionType) Decode(r io.Reader, width, height int) (data []byte, err error) {
