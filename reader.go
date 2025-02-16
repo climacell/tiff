@@ -58,6 +58,17 @@ func OpenReader(r io.Reader) (p *Reader, err error) {
 	return
 }
 
+func NewReader(r io.Reader, ifd [][]*IFD, header *Header) *Reader {
+	rs := openSeekioReader(r, -1)
+	p := &Reader{
+		Reader: rs,
+		Ifd:    ifd,
+		Header: header,
+		rs:     rs,
+	}
+	return p
+}
+
 func (p *Reader) ImageNum() int {
 	return len(p.Ifd)
 }
