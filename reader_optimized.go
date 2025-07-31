@@ -10,7 +10,6 @@ import (
 	"image"
 	"io"
 	"sort"
-	"time"
 
 	"github.com/climacell/go-middleware/backbone"
 )
@@ -101,13 +100,6 @@ func WithMaxAdaptiveReads(maxReads int) OptimizedReaderOption {
 // OpenReaderOptimized creates a new optimized TIFF reader with adaptive I/O
 // This reader is designed for high-performance scenarios with network/mounted filesystems
 func OpenReaderOptimized(r io.Reader, bb *backbone.Backbone, opts ...OptimizedReaderOption) (*OptimizedReader, error) {
-	start := time.Now()
-	defer func() {
-		if bb != nil {
-			bb.Metrics.Distribution("tiff.optimized.total_duration",
-				float64(time.Since(start).Nanoseconds()), []string{}, 0.1)
-		}
-	}()
 
 	// Configure options with sensible defaults
 	config := &OptimizedReaderConfig{
@@ -126,19 +118,13 @@ func OpenReaderOptimized(r io.Reader, bb *backbone.Backbone, opts ...OptimizedRe
 	rs := openSeekioReader(r, -1)
 
 	// Try optimized adaptive I/O approach first
-	if config.EnableMetrics && bb != nil {
-		bb.Metrics.Distribution("tiff.optimized.adaptive_attempt", 1.0, []string{}, 0.1)
-	}
-
 	optimizedReader, err := readTIFFMetadataAdaptive(rs, bb, config)
 	if err == nil {
 		optimizedReader.rs = rs
+		// Only track key performance metrics
 		if config.EnableMetrics && bb != nil {
-			bb.Metrics.Distribution("tiff.optimized.adaptive_success", 1.0, []string{}, 0.1)
 			bb.Metrics.Distribution("tiff.optimized.io_calls", float64(optimizedReader.IOCalls), []string{}, 0.1)
-			bb.Metrics.Distribution("tiff.optimized.adaptive_calls", float64(optimizedReader.AdaptiveCalls), []string{}, 0.1)
-			bb.Metrics.Distribution("tiff.optimized.bytes_read", float64(optimizedReader.BytesRead), []string{}, 0.1)
-			bb.Metrics.Distribution("tiff.optimized.buffer_efficiency", optimizedReader.Efficiency, []string{}, 0.1)
+			bb.Metrics.Distribution("tiff.optimized.efficiency", optimizedReader.Efficiency, []string{}, 0.1)
 		}
 		return optimizedReader, nil
 	}
@@ -149,16 +135,12 @@ func OpenReaderOptimized(r io.Reader, bb *backbone.Backbone, opts ...OptimizedRe
 			"error", err.Error(),
 			"bufferSize", config.BufferSize,
 			"fallbackEnabled", config.EnableFallback)
-		if config.EnableMetrics {
-			bb.Metrics.Distribution("tiff.optimized.adaptive_failed", 1.0, []string{}, 0.1)
-		}
+
 	}
 
 	// Fallback to traditional approach if enabled
 	if config.EnableFallback {
-		if bb != nil && config.EnableMetrics {
-			bb.Metrics.Distribution("tiff.optimized.fallback_used", 1.0, []string{}, 0.1)
-		}
+
 		return fallbackToTraditionalOptimized(rs, bb, config)
 	}
 
@@ -169,8 +151,6 @@ func OpenReaderOptimized(r io.Reader, bb *backbone.Backbone, opts ...OptimizedRe
 // readTIFFMetadataAdaptive performs smart adaptive metadata reading
 func readTIFFMetadataAdaptive(r io.ReadSeeker, bb *backbone.Backbone, config *OptimizedReaderConfig) (*OptimizedReader, error) {
 	// No global state needed - offset adjustment handled properly in parsing
-
-	ioStart := time.Now()
 
 	// Smart initial read strategy:
 	// 1. Read header first to understand file structure
@@ -194,12 +174,6 @@ func readTIFFMetadataAdaptive(r io.ReadSeeker, bb *backbone.Backbone, config *Op
 		Reader:    r,
 		IOCalls:   1,                 // Started with one I/O call
 		BytesRead: int64(actualRead), // Actual bytes read from file
-	}
-
-	if bb != nil && config.EnableMetrics {
-		bb.Metrics.Distribution("tiff.optimized.initial_io_duration",
-			float64(time.Since(ioStart).Nanoseconds()), []string{}, 0.1)
-		bb.Metrics.Distribution("tiff.optimized.initial_buffer_bytes", float64(actualRead), []string{}, 0.1)
 	}
 
 	// Smart parsing with adaptive reading for missing data
@@ -227,9 +201,6 @@ func parseWithAdaptiveReading(reader *OptimizedReader, initialBuffer []byte, r i
 
 	if len(missingRanges) == 0 {
 		// All metadata fits in initial buffer - we're done!
-		if bb != nil && config.EnableMetrics {
-			bb.Metrics.Distribution("tiff.optimized.single_io_success", 1.0, []string{}, 0.1)
-		}
 		return initialBuffer, nil
 	}
 
@@ -244,23 +215,6 @@ func parseWithAdaptiveReading(reader *OptimizedReader, initialBuffer []byte, r i
 		} else if len(smartBatchRanges) > 0 {
 			// Use smart batch instead of individual ranges
 			missingRanges = smartBatchRanges
-			if bb != nil {
-				bb.Logger.Infow("Using smart IFD batching",
-					"originalRanges", len(missingRanges),
-					"smartBatchRanges", len(smartBatchRanges))
-				if config.EnableMetrics {
-					bb.Metrics.Distribution("tiff.optimized.smart_batch_used", 1.0, []string{}, 0.1)
-				}
-			}
-		}
-	}
-
-	if bb != nil {
-		bb.Logger.Infow("Metadata extends beyond initial buffer, reading missing ranges",
-			"missingRanges", len(missingRanges),
-			"initialBufferSize", len(initialBuffer))
-		if config.EnableMetrics {
-			bb.Metrics.Distribution("tiff.optimized.missing_ranges_found", float64(len(missingRanges)), []string{}, 0.1)
 		}
 	}
 
@@ -284,20 +238,6 @@ func parseWithAdaptiveReading(reader *OptimizedReader, initialBuffer []byte, r i
 	reader.IOCalls += additionalIOCalls
 	reader.BytesRead += additionalBytes // Add only the additional bytes actually read
 	reader.AdaptiveCalls = additionalIOCalls
-
-	if bb != nil {
-		bb.Logger.Infow("Adaptive reading stats updated",
-			"additionalIOCalls", additionalIOCalls,
-			"additionalBytes", additionalBytes,
-			"totalIOCalls", reader.IOCalls,
-			"totalBytesRead", reader.BytesRead,
-			"adaptiveCalls", reader.AdaptiveCalls)
-	}
-
-	if bb != nil && config.EnableMetrics {
-		bb.Metrics.Distribution("tiff.optimized.adaptive_io_calls", float64(additionalIOCalls), []string{}, 0.1)
-		bb.Metrics.Distribution("tiff.optimized.adaptive_bytes_read", float64(additionalBytes), []string{}, 0.1)
-	}
 
 	return finalBuffer, nil
 }
@@ -342,15 +282,6 @@ func identifyMissingDataRanges(buffer []byte, bb *backbone.Backbone, config *Opt
 
 	// Merge adjacent/overlapping ranges for efficiency
 	mergedRanges := mergeDataRanges(missingRanges)
-
-	if bb != nil && config.EnableMetrics && len(mergedRanges) > 0 {
-		totalMissingBytes := int64(0)
-		for _, r := range mergedRanges {
-			totalMissingBytes += r.Size
-		}
-		bb.Metrics.Distribution("tiff.optimized.missing_bytes_total", float64(totalMissingBytes), []string{}, 0.1)
-		bb.Metrics.Distribution("tiff.optimized.missing_ranges_merged", float64(len(mergedRanges)), []string{}, 0.1)
-	}
 
 	return mergedRanges, nil
 }
@@ -466,13 +397,6 @@ func analyzeIFDForMissingData(buffer []byte, header *Header, ifdOffset int64, co
 					Size:   int64(dataSize),
 				})
 
-				if bb != nil {
-					bb.Logger.Debugw("Entry data beyond buffer detected",
-						"tag", tag,
-						"dataOffset", offset,
-						"dataSize", dataSize,
-						"bufferSize", len(buffer))
-				}
 			}
 		}
 
@@ -541,13 +465,6 @@ func analyzeIFDForMissingData(buffer []byte, header *Header, ifdOffset int64, co
 						Size:   totalSize,
 					})
 
-					if bb != nil {
-						bb.Logger.Debugw("Sub-IFD range extends beyond buffer",
-							"rangeStart", rangeStart,
-							"rangeEnd", rangeEnd,
-							"totalSize", totalSize,
-							"bufferSize", len(buffer))
-					}
 				}
 			}
 		}
@@ -631,12 +548,6 @@ func readMissingRanges(r io.ReadSeeker, initialBuffer []byte, ranges []DataRange
 		totalIOCalls++
 		totalBytesRead += int64(bytesRead)
 
-		if bb != nil {
-			bb.Logger.Debugw("Read missing data range",
-				"offset", dataRange.Offset,
-				"requestedSize", readSize,
-				"actualRead", bytesRead)
-		}
 	}
 
 	return expandedBuffer, totalIOCalls, totalBytesRead, nil
@@ -692,13 +603,6 @@ func mergeDataRanges(ranges []DataRange) []DataRange {
 
 // parseCompleteMetadataFromBufferOptimized handles the complete metadata parsing with safety features
 func parseCompleteMetadataFromBufferOptimized(reader *OptimizedReader, buffer []byte, bb *backbone.Backbone, config *OptimizedReaderConfig) error {
-	parseStart := time.Now()
-	defer func() {
-		if bb != nil && config.EnableMetrics {
-			bb.Metrics.Distribution("tiff.optimized.parse_duration",
-				float64(time.Since(parseStart).Nanoseconds()), []string{}, 0.1)
-		}
-	}()
 
 	if len(buffer) < 8 {
 		return fmt.Errorf("buffer too small for TIFF header: %d bytes", len(buffer))
@@ -720,20 +624,11 @@ func parseCompleteMetadataFromBufferOptimized(reader *OptimizedReader, buffer []
 	if reader.AdaptiveCalls == 0 {
 		// Single I/O success - efficiency = metadata / bytes_read
 		reader.Efficiency = float64(reader.MetadataSize) / float64(reader.BytesRead)
-		if bb != nil {
-			bb.Logger.Infow("Single I/O efficiency calculation",
-				"metadataSize", reader.MetadataSize,
-				"bytesRead", reader.BytesRead,
-				"efficiency", reader.Efficiency)
-		}
+
 	} else {
 		// Adaptive reading success - high efficiency since we targeted specific data
 		reader.Efficiency = 0.95 // 95% efficiency for successful adaptive reading
-		if bb != nil {
-			bb.Logger.Infow("Adaptive I/O efficiency set",
-				"adaptiveCalls", reader.AdaptiveCalls,
-				"efficiency", reader.Efficiency)
-		}
+
 	}
 
 	// Ensure efficiency doesn't exceed 100%
@@ -752,9 +647,7 @@ func parseCompleteMetadataFromBufferOptimized(reader *OptimizedReader, buffer []
 		if ifdCount > 1000 {
 			if bb != nil {
 				bb.Logger.Warnw("Too many IFDs detected, possible corruption", "ifdCount", ifdCount)
-				if config.EnableMetrics {
-					bb.Metrics.Distribution("tiff.optimized.too_many_ifds", 1.0, []string{}, 0.1)
-				}
+
 			}
 			return fmt.Errorf("too many IFDs: %d, possible corruption", ifdCount)
 		}
@@ -762,9 +655,7 @@ func parseCompleteMetadataFromBufferOptimized(reader *OptimizedReader, buffer []
 		// Check if IFD is within buffer (should be after smart batching)
 		if offset >= int64(len(buffer)) {
 			// This shouldn't happen after smart IFD batching, but handle gracefully
-			if bb != nil && config.EnableMetrics {
-				bb.Metrics.Distribution("tiff.optimized.ifd_beyond_buffer_after_batch", 1.0, []string{}, 0.1)
-			}
+
 			break // Use what we have so far
 		}
 
@@ -794,12 +685,6 @@ func parseCompleteMetadataFromBufferOptimized(reader *OptimizedReader, buffer []
 
 		reader.Ifd = append(reader.Ifd, ifdList)
 		offset = nextOffset
-	}
-
-	if bb != nil && config.EnableMetrics {
-		bb.Metrics.Distribution("tiff.optimized.ifds_parsed", float64(len(reader.Ifd)), []string{}, 0.1)
-		bb.Metrics.Distribution("tiff.optimized.final_efficiency", reader.Efficiency, []string{}, 0.1)
-		bb.Metrics.Distribution("tiff.optimized.metadata_size", float64(reader.MetadataSize), []string{}, 0.1)
 	}
 
 	return nil
@@ -987,13 +872,8 @@ func parseIFDFromBufferOptimized(buffer []byte, header *Header, offset int64, bb
 			bb.Logger.Warnw("Excessive IFD entry count, possible corruption",
 				"entryCount", entryCount,
 				"offset", offset)
-			bb.Metrics.Distribution("tiff.optimized.excessive_entry_count", 1.0, []string{}, 0.1)
 		}
 		return nil, 0, fmt.Errorf("too many IFD entries: %d (max: 10000)", entryCount)
-	}
-
-	if bb != nil && config.EnableMetrics {
-		bb.Metrics.Distribution("tiff.optimized.ifd.entry_count", float64(entryCount), []string{}, 0.1)
 	}
 
 	// Parse entries with memory protection
@@ -1005,9 +885,7 @@ func parseIFDFromBufferOptimized(buffer []byte, header *Header, offset int64, bb
 					"entryIndex", i,
 					"ifdOffset", offset,
 					"error", err.Error())
-				if config.EnableMetrics {
-					bb.Metrics.Distribution("tiff.optimized.entry_parse_error", 1.0, []string{}, 0.1)
-				}
+
 			}
 			return nil, 0, fmt.Errorf("entry %d parsing failed: %w", i, err)
 		}
@@ -1089,9 +967,7 @@ func parseIFDEntryFromBufferOptimized(buf *bytes.Reader, header *Header, fullBuf
 				"requestedSize", dataSize,
 				"maxAllowed", config.MaxIFDEntrySize,
 				"offset", offset)
-			if config.EnableMetrics {
-				bb.Metrics.Distribution("tiff.optimized.entry.size_limit_exceeded", 1.0, []string{}, 0.1)
-			}
+
 		}
 		return nil, fmt.Errorf("entry data size %d exceeds maximum allowed %d (tag=%v, count=%d)",
 			dataSize, config.MaxIFDEntrySize, tag, count)
@@ -1123,9 +999,6 @@ func parseIFDEntryFromBufferOptimized(buf *bytes.Reader, header *Header, fullBuf
 			entry.Data = make([]byte, dataSize)
 			copy(entry.Data, fullBuffer[adjustedOffset:adjustedOffset+int64(dataSize)])
 
-			if bb != nil && config.EnableMetrics {
-				bb.Metrics.Distribution("tiff.optimized.entry.data_from_buffer", 1.0, []string{}, 0.1)
-			}
 		} else {
 			// This should not happen after adaptive reading, but handle gracefully
 			if bb != nil {
@@ -1134,9 +1007,7 @@ func parseIFDEntryFromBufferOptimized(buf *bytes.Reader, header *Header, fullBuf
 					"dataOffset", offset,
 					"dataSize", dataSize,
 					"bufferSize", len(fullBuffer))
-				if config.EnableMetrics {
-					bb.Metrics.Distribution("tiff.optimized.entry.data_still_missing", 1.0, []string{}, 0.1)
-				}
+
 			}
 			return nil, fmt.Errorf("entry data for tag %v still extends beyond buffer after adaptive reading (offset=%d, size=%d, buffer=%d)",
 				tag, offset, dataSize, len(fullBuffer))
@@ -1147,7 +1018,7 @@ func parseIFDEntryFromBufferOptimized(buf *bytes.Reader, header *Header, fullBuf
 }
 
 // fallbackToTraditionalOptimized falls back to traditional reading but still tracks metrics
-func fallbackToTraditionalOptimized(r io.ReadSeeker, bb *backbone.Backbone, config *OptimizedReaderConfig) (*OptimizedReader, error) {
+func fallbackToTraditionalOptimized(r io.ReadSeeker, _ *backbone.Backbone, _ *OptimizedReaderConfig) (*OptimizedReader, error) {
 	// Use the traditional OpenReader but wrap it in OptimizedReader for consistency
 	traditionalReader, err := OpenReader(r)
 	if err != nil {
@@ -1183,10 +1054,6 @@ func fallbackToTraditionalOptimized(r io.ReadSeeker, bb *backbone.Backbone, conf
 		Efficiency:    0,
 		AdaptiveCalls: 0,
 		MetadataSize:  0,
-	}
-
-	if bb != nil && config.EnableMetrics {
-		bb.Metrics.Distribution("tiff.optimized.fallback_estimated_io_calls", float64(estimatedIOCalls), []string{}, 0.1)
 	}
 
 	return optimizedReader, nil
@@ -1445,26 +1312,6 @@ func calculateSmartIFDBatch(initialBuffer []byte, missingRanges []DataRange, r i
 
 	if len(smartRanges) == 0 {
 		return []DataRange{}, nil
-	}
-
-	if bb != nil {
-		bb.Logger.Infow("Calculated smart IFD clusters",
-			"ifdCount", len(ifdOffsets),
-			"clusterCount", len(clusters),
-			"smartRangeCount", len(smartRanges),
-			"totalReadSize", totalReadSize,
-			"originalRanges", len(missingRanges))
-
-		for i, cluster := range clusters {
-			if i < len(smartRanges) {
-				bb.Logger.Infow("IFD cluster details",
-					"clusterIndex", i,
-					"ifdCount", len(cluster),
-					"ifdOffsets", cluster,
-					"readOffset", smartRanges[i].Offset,
-					"readSize", smartRanges[i].Size)
-			}
-		}
 	}
 
 	return smartRanges, nil
