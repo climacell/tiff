@@ -1,8 +1,13 @@
-module github.com/climacell/tiff
+module debug
 
-go 1.23
+go 1.23.2
 
-require github.com/climacell/go-middleware v0.2.6
+replace github.com/climacell/tiff => ../
+
+require (
+	github.com/climacell/go-middleware v0.2.6
+	github.com/climacell/tiff v0.0.0-00010101000000-000000000000
+)
 
 require (
 	github.com/DataDog/datadog-go/v5 v5.1.1 // indirect
