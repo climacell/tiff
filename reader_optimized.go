@@ -16,6 +16,8 @@ import (
 
 // Maximum allowed memory allocation per IFD entry (10MB) - circuit breaker
 const MaxOptimizedIFDEntrySize = 10 * 1024 * 1024
+const DefaultOptimizedBufferSize = 2 * 1024
+const DefaultOptimizedMinEfficiency = 0.1
 
 // Maximum gap between entry data offsets to consider them for batch reading (64KB)
 const MaxBatchGap = 64 * 1024
@@ -84,9 +86,9 @@ func WithMinEfficiency(efficiency float64) OptimizedReaderOption {
 }
 
 // WithMetricsDisabled disables detailed metrics collection
-func WithMetricsDisabled() OptimizedReaderOption {
+func WithMetricsEnabled() OptimizedReaderOption {
 	return func(c *OptimizedReaderConfig) {
-		c.EnableMetrics = false
+		c.EnableMetrics = true
 	}
 }
 
@@ -103,12 +105,12 @@ func OpenReaderOptimized(r io.Reader, bb *backbone.Backbone, opts ...OptimizedRe
 
 	// Configure options with sensible defaults
 	config := &OptimizedReaderConfig{
-		BufferSize:       32 * 1024, // 32KB - reasonable for metadata headers
+		BufferSize:       DefaultOptimizedBufferSize,
 		MaxIFDEntrySize:  MaxOptimizedIFDEntrySize,
 		EnableFallback:   true,
-		EnableMetrics:    true,
-		MinEfficiency:    0.3, // 30% minimum efficiency to use single I/O
-		MaxAdaptiveReads: 5,   // Allow up to 5 adaptive reads
+		EnableMetrics:    false,
+		MinEfficiency:    DefaultOptimizedMinEfficiency,
+		MaxAdaptiveReads: 5, // Allow up to 5 adaptive reads
 	}
 
 	for _, opt := range opts {
@@ -146,6 +148,32 @@ func OpenReaderOptimized(r io.Reader, bb *backbone.Backbone, opts ...OptimizedRe
 
 	rs.Close()
 	return nil, fmt.Errorf("optimized reading failed and fallback disabled: %w", err)
+}
+
+// NewOptimizedReader creates a new optimized TIFF reader with adaptive I/O
+// With pre-parsed IFD and header
+func NewOptimizedReader(r io.ReadSeeker, ifd [][]*IFD, header *Header, bb *backbone.Backbone, opts ...OptimizedReaderOption) *OptimizedReader {
+	rs := openSeekioReader(r, -1)
+
+	config := &OptimizedReaderConfig{
+		BufferSize:       DefaultOptimizedBufferSize,
+		MaxIFDEntrySize:  MaxOptimizedIFDEntrySize,
+		EnableFallback:   true,
+		EnableMetrics:    false,
+		MinEfficiency:    DefaultOptimizedMinEfficiency,
+		MaxAdaptiveReads: 5, // Allow up to 5 adaptive reads
+	}
+
+	for _, opt := range opts {
+		opt(config)
+	}
+
+	return &OptimizedReader{
+		Reader: rs,
+		Header: header,
+		Ifd:    ifd,
+		rs:     rs,
+	}
 }
 
 // readTIFFMetadataAdaptive performs smart adaptive metadata reading
